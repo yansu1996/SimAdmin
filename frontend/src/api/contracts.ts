@@ -4,6 +4,20 @@ export interface ApiResponse<T> {
   data?: T
 }
 
+export interface AuthStatusResponse {
+  configured: boolean
+  authenticated: boolean
+}
+
+export interface LoginRequest {
+  password: string
+}
+
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
+}
+
 export type WorkMode = 'sim' | 'esim'
 
 export interface WorkModeResponse {

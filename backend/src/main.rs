@@ -8,6 +8,7 @@ use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
     http::{StatusCode, Uri},
+    middleware,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Router,
@@ -23,6 +24,7 @@ use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use zbus::Connection;
 
+mod auth;
 mod cell_lock_store;
 mod config;
 mod db;
@@ -60,6 +62,14 @@ fn get_www_dir() -> PathBuf {
 
     // 拼接 www 目录
     exe_dir.join("www")
+}
+
+fn get_data_db_path() -> PathBuf {
+    std::env::current_exe()
+        .expect("Failed to get executable path")
+        .parent()
+        .expect("Failed to get executable directory")
+        .join("data.db")
 }
 
 /// SPA fallback handler - 对于所有前端路由返回 index.html
@@ -222,6 +232,11 @@ struct Cli {
 enum CliCommand {
     /// 启动 Web 管理服务
     Serve(ServeArgs),
+    /// 管理 Web 登录认证（用于 SSH 本机恢复）
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// 解压 ZIP 文件到指定目录（供安装脚本调用）
     ExtractZip {
         /// ZIP 文件路径
@@ -229,6 +244,14 @@ enum CliCommand {
         /// 解压目标目录
         target: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthCommand {
+    /// 交互式重置管理员密码，并清空所有 Web 会话
+    ResetPassword,
+    /// 清除管理员密码，让 Web UI 下次进入首次设置
+    Clear,
 }
 
 #[derive(ClapArgs, Debug, Clone)]
@@ -251,15 +274,19 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().with_target(false))
         .init();
 
-    // 确保 ModemManager 已提权以支持 AT 指令读取短信中心
-    ensure_modemmanager_debug_override();
-
     // 解析命令行参数
     let cli = Cli::parse();
 
     // 处理非服务子命令
     if let Some(CliCommand::ExtractZip { archive, target }) = &cli.command {
         return run_extract_zip(archive, target);
+    }
+    if let Some(CliCommand::Auth { command }) = &cli.command {
+        let db = Database::new(get_data_db_path())?;
+        return match command {
+            AuthCommand::ResetPassword => auth::reset_admin_password_interactive(&db),
+            AuthCommand::Clear => auth::clear_admin_auth(&db),
+        };
     }
 
     let args = match cli.command {
@@ -269,16 +296,14 @@ async fn main() -> Result<()> {
     };
     let bind_addr = display_bind_addr(&args.host, args.port);
 
+    // 确保 ModemManager 已提权以支持 AT 指令读取短信中心
+    ensure_modemmanager_debug_override();
+
     // Connect to system D-Bus
     let dbus_conn = Arc::new(Connection::system().await?);
 
     // 创建 SMS 数据库（存储在可执行文件同级目录）
-    let exe_dir = std::env::current_exe()
-        .expect("Failed to get executable path")
-        .parent()
-        .expect("Failed to get executable directory")
-        .to_path_buf();
-    let db_path = exe_dir.join("data.db");
+    let db_path = get_data_db_path();
     let app_db = Arc::new(Database::new(db_path)?);
 
     // 初始化配置管理器
@@ -426,8 +451,8 @@ async fn main() -> Result<()> {
         cell_monitoring_active,
     );
 
-    // Build routes - 使用统一的 AppState
-    let app = Router::new()
+    // Build protected routes - 使用统一的 AppState
+    let protected_routes = Router::new()
         // ========== 设备信息接口 ==========
         .route("/api/device", get(get_device_info).options(options_handler))
         // ========== SIM 卡接口 ==========
@@ -733,7 +758,6 @@ async fn main() -> Result<()> {
             "/api/service/restart",
             post(restart_service_handler).options(options_handler),
         )
-        .route("/api/health", get(health_check))
         // ========== 通知配置接口 ==========
         .route(
             "/api/notifications/config",
@@ -772,7 +796,30 @@ async fn main() -> Result<()> {
             "/api/ota/cancel",
             post(cancel_ota_handler).options(options_handler),
         )
-        // ========== 统一状态和中间件 ==========
+        .route(
+            "/api/auth/password",
+            post(auth::change_password).options(options_handler),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            auth::auth_middleware,
+        ));
+
+    let app = Router::new()
+        .route("/api/health", get(health_check).options(options_handler))
+        .route(
+            "/api/auth/status",
+            get(auth::status).options(options_handler),
+        )
+        .route(
+            "/api/auth/setup",
+            post(auth::setup).options(options_handler),
+        )
+        .route(
+            "/api/auth/login",
+            post(auth::login).options(options_handler),
+        )
+        .merge(protected_routes)
         .with_state(app_state)
         .layer(cors)
         .fallback(spa_fallback);

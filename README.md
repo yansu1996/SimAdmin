@@ -180,6 +180,37 @@ cargo run -- --host :: --port 3000
 
 在普通开发机上运行后端时，如果没有 system D-Bus、ModemManager 或 modem，硬件相关接口会返回错误，这是预期行为。
 
+### 登录与管理员密码
+
+SimAdmin 采用后台式单管理员密码登录，不包含用户名和多账号权限系统。首次打开 Web 后台时会进入 `/login` 的“设置管理员密码”页面；设置成功后会自动建立会话并进入管理后台。
+
+密码规则：
+
+- 8-64 个字符。
+- 只能使用英文字母、数字和符号，不允许空格或中文。
+- 至少包含两类字符，例如字母 + 数字、字母 + 符号或数字 + 符号。
+
+登录与接口保护：
+
+- 管理后台页面和 `/api/*` 业务接口默认需要登录；`/api/health`、`/api/auth/status`、`/api/auth/setup`、`/api/auth/login` 为公开接口。
+- 未登录访问受保护页面会跳转到 `/login`；前端 API 请求遇到 `401` 会自动进入登录页，直接调用 API 时返回标准 JSON 错误。
+- 会话使用 `simadmin_session` HttpOnly Cookie，默认有效期 7 天。重置或清除管理员密码会清空所有 Web 会话。
+- 当前不提供手动登出入口，适合单管理员设备后台场景。
+
+忘记密码时，可通过 SSH 登录目标设备后执行交互式重置：
+
+```bash
+/opt/simadmin/simadmin auth reset-password
+```
+
+如需清除管理员密码并让 Web UI 下次重新进入首次设置：
+
+```bash
+/opt/simadmin/simadmin auth clear
+```
+
+如果使用了自定义安装目录，请将 `/opt/simadmin/simadmin` 替换为实际后端二进制路径。
+
 ### 构建完整 OTA 包
 
 ```bash
@@ -323,7 +354,7 @@ curl -fsSL https://raw.githubusercontent.com/3899/SimAdmin/main/uninstall.sh \
 | `/opt/simadmin/simadmin` | 后端二进制 |
 | `/opt/simadmin/www/` | 前端静态文件 |
 | `/opt/simadmin/lpac/` | 安装脚本按设备架构下载的私有 `lpac` 运行文件，后端优先使用 |
-| `/opt/simadmin/data.db` | SQLite 数据库，保存短信等业务数据 |
+| `/opt/simadmin/data.db` | SQLite 数据库，保存短信、登录认证配置和 Web 会话等数据 |
 | `/opt/simadmin/meta.json` | 当前安装包元数据 |
 | `/data/config.json` | 优先使用的持久化配置文件 |
 | `/opt/simadmin/config.json` | `/data` 不存在时的配置文件回退路径 |
@@ -365,6 +396,7 @@ journalctl -u simadmin -f
 
 | 页面 | 路由 | 说明 |
 |------|------|------|
+| 登录认证 | `/login` | 首次设置管理员密码、登录后台 |
 | 仪表盘 | `/` | 在线状态、运营商、信号、网络延迟、数据/漫游/飞行模式快捷开关、系统资源、温度、流量 |
 | 设备信息 | `/device` | IMEI、厂商、型号、固件、SIM、系统信息 |
 | eSIM 管理 | `/esim` | eSIM 模式下显示，管理插入设备的实体 eUICC SIM 卡 Profiles |
@@ -377,6 +409,7 @@ journalctl -u simadmin -f
 
 ### 后端能力
 
+- 单管理员密码登录，支持首次设置、会话 Cookie、受保护 API 拦截和 SSH 本机恢复。
 - 设备信息、SIM 信息、网络注册信息读取。
 - 数据连接开关和漫游策略持久化。
 - 飞行模式控制。
@@ -396,6 +429,12 @@ journalctl -u simadmin -f
 ## 🚀 版本更新记录
 
 ### 📌 v1.0.7
+
+#### ✨ 新增功能
+
+- 新增管理员密码登录能力，支持初始配置、会话校验，防护页面与接口访问访问保护。
+- 支持 SSH 本地命令交互式重置密码、清空认证配置后重新设置。
+- 增加密码复杂度校验，过滤非法格式字符。
 
 #### 💫 体验优化
 
@@ -760,6 +799,34 @@ busctl introspect org.freedesktop.ModemManager1 /org/freedesktop/ModemManager1/M
 }
 ```
 
+除 `/api/health` 和认证初始化接口外，业务接口需要携带登录后由后端设置的 `simadmin_session` Cookie。
+
+### 登录认证
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/auth/status` | GET | 查询是否已设置管理员密码以及当前会话是否已登录 |
+| `/api/auth/setup` | POST | 首次设置管理员密码，仅在尚未配置密码时可用 |
+| `/api/auth/login` | POST | 使用管理员密码登录，成功后写入 `simadmin_session` Cookie |
+| `/api/auth/password` | POST | 已登录后修改管理员密码，并清空旧 Web 会话 |
+
+`/api/auth/setup` 和 `/api/auth/login` 请求体：
+
+```json
+{
+  "password": "AdminPassword123!"
+}
+```
+
+`/api/auth/password` 请求体：
+
+```json
+{
+  "current_password": "OldPassword123!",
+  "new_password": "NewPassword123!"
+}
+```
+
 ### 基础信息
 
 | 接口 | 方法 | 说明 |
@@ -948,6 +1015,10 @@ pub async fn set_some_modem_state(conn: &Connection) -> zbus::Result<()> {
 SQLite 数据库保存：
 
 - `sms_messages`：短信收发记录。
+- `auth_config`：管理员密码哈希等登录认证配置。
+- `auth_sessions`：Web 会话哈希和过期时间。
+
+管理员密码和会话 token 不以明文存储。修改或清除管理员密码会同步清空旧会话。
 
 配置文件保存：
 

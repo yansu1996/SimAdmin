@@ -3,6 +3,7 @@ import type {
   AirplaneModeResponse,
   ApiResponse,
   ApnListResponse,
+  AuthStatusResponse,
   BandLockRequest,
   BandLockStatus,
   BasebandRestartResponse,
@@ -13,6 +14,7 @@ import type {
   CellLockRequest,
   CellLockResult,
   CellLockStatusResponse,
+  ChangePasswordRequest,
   CellsResponse,
   ConnectionAddressesResponse,
   ConnectivityCheckResponse,
@@ -29,6 +31,7 @@ import type {
   EsimLpacRepairResponse,
   EsimLpacStatusResponse,
   EsimProfilesResponse,
+  LoginRequest,
   ManualRegisterRequest,
   NetworkInfo,
   NetworkInterfacesResponse,
@@ -70,6 +73,29 @@ type SmsListResponse = {
 
 const API_BASE = '/api'
 
+type RequestOptions = RequestInit & {
+  returnText?: boolean
+  timeoutMs?: number
+  skipAuthRedirect?: boolean
+}
+
+function redirectToLogin() {
+  const currentPath = `${window.location.pathname}${window.location.search}`
+  if (window.location.pathname === '/login') return
+  window.location.assign(currentPath === '/' ? '/login' : `/login?next=${encodeURIComponent(currentPath)}`)
+}
+
+function httpStatusMessage(status: number) {
+  if (status === 400) return '请求参数有误'
+  if (status === 401) return '请先登录'
+  if (status === 403) return '没有权限执行此操作'
+  if (status === 404) return '请求的接口不存在'
+  if (status === 408) return '请求超时'
+  if (status === 413) return '上传内容过大'
+  if (status >= 500) return '服务器处理失败'
+  return `请求失败，状态码 ${status}`
+}
+
 function throwIfApiEnvelopeError(payload: unknown): void {
   if (typeof payload !== 'object' || payload === null) return
   if (!('status' in payload)) return
@@ -82,9 +108,9 @@ function throwIfApiEnvelopeError(payload: unknown): void {
 
 async function request<T>(
   url: string,
-  options: RequestInit & { returnText?: boolean; timeoutMs?: number } = {},
+  options: RequestOptions = {},
 ): Promise<T> {
-  const { returnText, timeoutMs, ...fetchOptions } = options
+  const { returnText, timeoutMs, skipAuthRedirect, ...fetchOptions } = options
   const controller = timeoutMs ? new AbortController() : undefined
   const timeoutId = controller
     ? window.setTimeout(() => controller.abort(), timeoutMs)
@@ -97,6 +123,7 @@ async function request<T>(
         'Content-Type': 'application/json',
         ...fetchOptions.headers,
       },
+      credentials: 'same-origin',
       ...fetchOptions,
       signal: controller?.signal ?? fetchOptions.signal,
     })
@@ -110,6 +137,9 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    if (response.status === 401 && !skipAuthRedirect) {
+      redirectToLogin()
+    }
     let apiMessage: string | undefined
     try {
       const payload = await response.json()
@@ -121,7 +151,7 @@ async function request<T>(
       // Fall back to the HTTP status below.
     }
     if (apiMessage) throw new Error(apiMessage)
-    throw new Error(`HTTP error! status: ${response.status}`)
+    throw new Error(httpStatusMessage(response.status))
   }
 
   if (returnText) {
@@ -134,6 +164,41 @@ async function request<T>(
 }
 
 class SimAdminCurrentAPI {
+  async getAuthStatus() {
+    return request<ApiResponse<AuthStatusResponse>>('/auth/status', {
+      skipAuthRedirect: true,
+    })
+  }
+
+  async setupAdminPassword(password: string) {
+    const body: LoginRequest = { password }
+    return request<ApiResponse<null>>('/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      skipAuthRedirect: true,
+    })
+  }
+
+  async login(password: string) {
+    const body: LoginRequest = { password }
+    return request<ApiResponse<null>>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      skipAuthRedirect: true,
+    })
+  }
+
+  async changeAdminPassword(currentPassword: string, newPassword: string) {
+    const body: ChangePasswordRequest = {
+      current_password: currentPassword,
+      new_password: newPassword,
+    }
+    return request<ApiResponse<null>>('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
   async health() {
     return request<{ status: string; message: string; version: string }>('/health')
   }
@@ -628,13 +693,17 @@ class SimAdminCurrentAPI {
     const response = await fetch(`${API_BASE}/ota/upload`, {
       method: 'POST',
       body: file,
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/octet-stream',
       },
     })
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      if (response.status === 401) {
+        redirectToLogin()
+      }
+      throw new Error(httpStatusMessage(response.status))
     }
 
     return response.json() as Promise<ApiResponse<OtaUploadResponse>>

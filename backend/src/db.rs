@@ -308,9 +308,122 @@ impl Database {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS auth_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_hash TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions(expires_at)",
+            [],
+        )?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    // ==================== 认证相关方法 ====================
+
+    pub fn auth_is_configured(&self) -> Result<bool> {
+        Ok(self.get_auth_config_value("admin_password_hash")?.is_some())
+    }
+
+    pub fn get_auth_config_value(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM auth_config WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn set_auth_config_value(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO auth_config (key, value, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+            params![key, value, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn replace_admin_password_hash(&self, password_hash: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let now = Utc::now().timestamp();
+        tx.execute(
+            "INSERT INTO auth_config (key, value, updated_at)
+             VALUES ('admin_password_hash', ?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+            params![password_hash, now],
+        )?;
+        tx.execute("DELETE FROM auth_sessions", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_admin_auth(&self) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM auth_config WHERE key = 'admin_password_hash'",
+            [],
+        )?;
+        tx.execute("DELETE FROM auth_sessions", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn insert_auth_session(&self, session_hash: &str, ttl_seconds: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO auth_sessions (session_hash, created_at, expires_at)
+             VALUES (?1, ?2, ?3)",
+            params![session_hash, now, now + ttl_seconds],
+        )?;
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        Ok(())
+    }
+
+    pub fn auth_session_valid(&self, session_hash: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= ?1",
+            params![now],
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM auth_sessions
+             WHERE session_hash = ?1 AND expires_at > ?2",
+            params![session_hash, now],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
     }
 
     // ==================== 短信相关方法 ====================
