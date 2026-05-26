@@ -64,6 +64,7 @@ pub struct NotificationFanoutResult {
 #[derive(Default)]
 struct SmsTemplateContext {
     own_number: String,
+    carrier: String,
 }
 
 #[derive(Default)]
@@ -245,7 +246,14 @@ impl NotificationSender {
                 .map(|sim| format_own_numbers_for_template(&sim.phone_numbers))
                 .unwrap_or_default();
 
-        SmsTemplateContext { own_number }
+        let carrier =
+            crate::modem_manager::get_network_info_data(self.dbus_conn.as_ref())
+                .await
+                .ok()
+                .map(|net| net.operator_name)
+                .unwrap_or_default();
+
+        SmsTemplateContext { own_number, carrier }
     }
 
     /// Forward an incoming SMS to all enabled channels.
@@ -2735,6 +2743,11 @@ fn render_sms_template(
     } else {
         context.own_number.clone()
     };
+    let carrier = if escape_json {
+        escape_json_string(&context.carrier)
+    } else {
+        context.carrier.clone()
+    };
     let timestamp = render_time_value(&message.timestamp, escape_json);
     let verification_code = extract_verification_code(&message.content).unwrap_or_default();
 
@@ -2764,6 +2777,9 @@ fn render_sms_template(
         .replace("{{sender}}", &message.phone_number)
         .replace("{{message}}", &content)
         .replace("{{time}}", &timestamp)
+        .replace("{{carrier}}", &carrier)
+        .replace("{{operator}}", &carrier)
+        .replace("{{运营商}}", &carrier)
 }
 
 fn format_own_numbers_for_template(numbers: &[String]) -> String {
@@ -3056,6 +3072,7 @@ mod tests {
         };
         let context = SmsTemplateContext {
             own_number: "+10001".to_string(),
+            ..Default::default()
         };
 
         assert_eq!(
@@ -3066,6 +3083,33 @@ mod tests {
                 false
             ),
             "+10001|+10001|+10001|+10001"
+        );
+    }
+
+    #[test]
+    fn renders_sms_carrier_variables() {
+        let message = SmsMessage {
+            id: 7,
+            direction: "incoming".to_string(),
+            phone_number: "+10000".to_string(),
+            content: "hello".to_string(),
+            timestamp: "2026-05-14T16:30:45Z".to_string(),
+            status: "received".to_string(),
+            pdu: None,
+        };
+        let context = SmsTemplateContext {
+            own_number: "+10001".to_string(),
+            carrier: "中国联通".to_string(),
+        };
+
+        assert_eq!(
+            render_sms_template(
+                "{{运营商}}|{{carrier}}|{{operator}}",
+                &message,
+                &context,
+                false
+            ),
+            "中国联通|中国联通|中国联通"
         );
     }
 

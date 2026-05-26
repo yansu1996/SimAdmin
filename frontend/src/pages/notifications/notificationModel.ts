@@ -162,6 +162,7 @@ export const TEMPLATE_VARIABLES: Record<NotificationEventType, TemplateVariable[
     { label: '短信内容', token: '{{短信内容}}' },
     { label: '验证码', token: '{{验证码}}' },
     { label: '时间', token: '{{时间}}' },
+    { label: '运营商', token: '{{运营商}}' },
     { label: '短信方向', token: '{{短信方向}}' },
     { label: '短信状态', token: '{{短信状态}}' },
   ],
