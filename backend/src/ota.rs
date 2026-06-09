@@ -226,6 +226,7 @@ pub async fn check_and_notify_version_update(
     let asset = supported_release_asset(&release)
         .ok_or_else(|| "No supported OTA asset found in latest release".to_string())?;
     let (meta, package_md5) = fetch_release_asset_meta(&client, &proxy_prefix, true, asset).await?;
+    let own_number = notification_sender.get_own_number().await;
     let event = VersionUpdateEvent {
         asset_name: asset.name.clone(),
         version: if meta.version.trim().is_empty() {
@@ -244,6 +245,7 @@ pub async fn check_and_notify_version_update(
         frontend_md5: meta.frontend_md5.clone(),
         release_url: release.html_url.clone().unwrap_or_default(),
         timestamp: chrono::Utc::now().to_rfc3339(),
+        own_number,
     };
 
     let result = notification_sender

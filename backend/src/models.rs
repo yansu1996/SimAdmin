@@ -991,6 +991,7 @@ pub struct VersionUpdateEvent {
     pub frontend_md5: String,
     pub release_url: String,
     pub timestamp: String,
+    pub own_number: String,
 }
 
 #[derive(Debug, Default, Serialize)]

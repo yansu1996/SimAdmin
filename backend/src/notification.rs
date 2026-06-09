@@ -238,13 +238,16 @@ impl NotificationSender {
         self.config_manager.get_notifications()
     }
 
+    pub async fn get_own_number(&self) -> String {
+        get_sim_info_data_with_cache(self.dbus_conn.as_ref(), Some(self.database.as_ref()))
+            .await
+            .ok()
+            .map(|sim| format_own_numbers_for_template(&sim.phone_numbers))
+            .unwrap_or_default()
+    }
+
     async fn sms_template_context(&self) -> SmsTemplateContext {
-        let own_number =
-            get_sim_info_data_with_cache(self.dbus_conn.as_ref(), Some(self.database.as_ref()))
-                .await
-                .ok()
-                .map(|sim| format_own_numbers_for_template(&sim.phone_numbers))
-                .unwrap_or_default();
+        let own_number = self.get_own_number().await;
 
         let carrier =
             crate::modem_manager::get_network_info_data(self.dbus_conn.as_ref())
@@ -2353,11 +2356,11 @@ const DEFAULT_DDNS_JSON_TEMPLATE: &str = r#"{
     "text": "SimAdmin DDNS 通知\n域名: {{domains}}\nIP类型: {{ip_type}}\n新IP: {{new_ip}}\n旧IP: {{old_ip}}\n服务商: {{provider}}\n记录类型: {{record_type}}\n状态: {{status}}\n消息: {{message}}\n更新时间: {{timestamp}}"
   }
 }"#;
-const DEFAULT_UPDATE_TEXT_TEMPLATE: &str = "SimAdmin 发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}\n\n请前往 OTA 更新页面的在线更新模块检查更新，可一键下载并升级。";
+const DEFAULT_UPDATE_TEXT_TEMPLATE: &str = "🚀 SimAdmin 发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}\n来源: {{本机号码}}\n\n请前往 OTA 更新页面的在线更新模块检查更新，可一键下载并升级。";
 const DEFAULT_UPDATE_JSON_TEMPLATE: &str = r#"{
   "msg_type": "text",
   "content": {
-    "text": "SimAdmin 发现新版本\n固件包: {{asset_name}}\n版本号: {{version}}\nCommit: {{commit}}\n构建时间: {{build_time}}\nOTA包 MD5: {{md5}}\n\n请前往 OTA 更新页面的在线更新模块检查更新，可一键下载并升级。"
+    "text": "🚀 SimAdmin 发现新版本\n固件包: {{asset_name}}\n版本号: {{version}}\nCommit: {{commit}}\n构建时间: {{build_time}}\nOTA包 MD5: {{md5}}\n来源: {{own_number}}\n\n请前往 OTA 更新页面的在线更新模块检查更新，可一键下载并升级。"
   }
 }"#;
 
@@ -2458,6 +2461,7 @@ fn render_version_update_template(
     let release_url = maybe_escape(&event.release_url);
     let timestamp_value = format_notification_time(&event.timestamp);
     let timestamp = maybe_escape(&timestamp_value);
+    let own_number = maybe_escape(&event.own_number);
 
     template
         .replace("{{asset_name}}", &asset_name)
@@ -2485,6 +2489,10 @@ fn render_version_update_template(
         .replace("{{前端MD5}}", &frontend_md5)
         .replace("{{发布地址}}", &release_url)
         .replace("{{发布时间}}", &timestamp)
+        .replace("{{own_number}}", &own_number)
+        .replace("{{local_phone_number}}", &own_number)
+        .replace("{{self_phone_number}}", &own_number)
+        .replace("{{本机号码}}", &own_number)
 }
 
 fn render_system_event_template(template: &str, event: &SystemEvent, escape_json: bool) -> String {
@@ -3205,15 +3213,16 @@ mod tests {
             frontend_md5: "frontend-md5".to_string(),
             release_url: "https://github.com/3899/SimAdmin/releases/tag/v1.0.4".to_string(),
             timestamp: "2026-05-14T17:00:00Z".to_string(),
+            own_number: "+10001".to_string(),
         };
 
         assert_eq!(
             render_version_update_template(
-                "{{asset_name}}|{{version}}|{{Commit}}|{{build_time}}|{{MD5}}",
+                "{{asset_name}}|{{version}}|{{Commit}}|{{build_time}}|{{MD5}}|{{本机号码}}",
                 &event,
                 false
             ),
-            "simadmin_1.0.4.tar.gz|1.0.4|abc1234|2026-05-15 00:30:45|package-md5"
+            "simadmin_1.0.4.tar.gz|1.0.4|abc1234|2026-05-15 00:30:45|package-md5|+10001"
         );
     }
 

@@ -654,7 +654,7 @@ fn default_update_template() -> String {
     r#"{
   "msg_type": "text",
   "content": {
-    "text": "SimAdmin 发现新版本\n固件包: {{asset_name}}\n版本号: {{version}}\nCommit: {{commit}}\n构建时间: {{build_time}}\nOTA包 MD5: {{md5}}\n\n请前往 OTA 在线更新模块检测版本，一键下载并升级。"
+    "text": "🚀 SimAdmin 发现新版本\n固件包: {{asset_name}}\n版本号: {{version}}\nCommit: {{commit}}\n构建时间: {{build_time}}\nOTA包 MD5: {{md5}}\n来源: {{own_number}}\n\n请前往 OTA 在线更新模块检测版本，一键下载并升级。"
   }
 }"#
     .to_string()
@@ -674,7 +674,7 @@ fn default_plain_ddns_template() -> String {
 }
 
 fn default_plain_update_template() -> String {
-    "SimAdmin 发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}\n\n请前往 OTA 在线更新模块检测版本，一键下载并升级。".to_string()
+    "🚀 SimAdmin 发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}\n来源: {{本机号码}}\n\n请前往 OTA 在线更新模块检测版本，一键下载并升级。".to_string()
 }
 
 fn default_sms_title_template() -> String {
@@ -1180,7 +1180,7 @@ pub fn default_rule_template(event_type: NotificationEventType) -> String {
             "DDNS 通知\n域名: {{域名}}\nIP 类型: {{IP类型}}\n新 IP: {{新IP}}\n旧 IP: {{旧IP}}\n服务商: {{服务商}}\n记录类型: {{记录类型}}\n状态: {{状态}}\n消息: {{消息}}\n更新时间: {{更新时间}}".to_string()
         }
         NotificationEventType::VersionUpdate => {
-            "发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}".to_string()
+            "🚀 SimAdmin 发现新版本\n固件包: {{固件包}}\n版本号: {{版本号}}\nCommit: {{Commit}}\n构建时间: {{构建时间}}\nMD5: {{MD5}}\n来源: {{本机号码}}".to_string()
         }
         NotificationEventType::SystemEvent => {
             "系统事件通知\n分类: {{分类}}\n事件: {{事件}}\n等级: {{等级}}\n状态: {{状态}}\n对象: {{对象}}\n消息: {{消息}}\n时间: {{时间}}".to_string()
